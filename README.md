@@ -34,3 +34,6 @@ Run `-sync` (Replace the dash with your configured prefix), this may take up to 
 If you'd like to contribute something to this bot, lets chat!
 Just open up an issue.
 If you want to contribute code, look at existing issues and submit a pull request.
+
+### Attribution
+The Gong-sound.mp3 audio file was sourced from https://orangefreesounds.com/gong-sound/.

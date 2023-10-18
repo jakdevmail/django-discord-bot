@@ -1,4 +1,6 @@
+import asyncio
 import json
+import pathlib
 import textwrap
 import logging
 import typing
@@ -38,6 +40,8 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="-", intents=intents)
 
+LOCAL_AUDIO_FILE_PATH = "audio"
+
 
 def is_post_already_in_channel(post, channel) -> bool:
     return any((thread.name == post.title) for thread in channel.threads)
@@ -76,6 +80,8 @@ async def sync_feed(into_channel_id: int, feed: RSSFeed):
 
 
 @loop(seconds=config("RSS_SYNC_INTERVAL_SECONDS", cast=int))
+@commands.has_permissions(kick_members=True)
+@discord.app_commands.guild_only()
 async def sync_feeds():
     """Fetches posts from feeds and inserts them (if not already present) into the channel id (dict key)."""
     for channel_id, feed in feeds.items():
@@ -86,6 +92,7 @@ async def sync_feeds():
 
 @bot.hybrid_command(name="justask", description="Nag a user to not ask to ask")
 @discord.app_commands.describe(user="The user to mention")
+@discord.app_commands.guild_only()
 async def just_ask(ctx, user: typing.Optional[discord.User]):
     if user:
         await ctx.reply(
@@ -96,8 +103,55 @@ async def just_ask(ctx, user: typing.Optional[discord.User]):
     await ctx.reply("Don't ask to ask, just ask: https://dontasktoask.com")
 
 
+async def sound_files_autocomplete(_: discord.Interaction, current: str) -> typing.List[discord.app_commands.Choice[str]]:
+    files = [
+        discord.app_commands.Choice(name=f"{file.stem} ({file.suffix})", value=str(file))
+        for file in pathlib.Path(LOCAL_AUDIO_FILE_PATH).iterdir()
+        if file.is_file() and current in file.name
+    ]
+
+    return files
+
+
+@bot.hybrid_command(name="sequentialplayback", description="Joins a channel, plays the sound and continues to the next channel.")
+@discord.app_commands.describe(sound="The sound to play")
+@discord.app_commands.describe(volume="Float volume multiplier to apply to the audio (example: 0.5 for halving the playback volume)")
+@discord.app_commands.describe(channels="Channel ids (space separated) which should be joined")
+@discord.app_commands.autocomplete(sound=sound_files_autocomplete)
+@commands.has_permissions(kick_members=True)
+@discord.app_commands.guild_only()
+async def sequential_playback(ctx: Context, sound, volume: float, channels: commands.Greedy[int]):
+    await ctx.reply("Starting up")
+
+    voice_channel = discord.utils.get(ctx.bot.voice_clients)
+    if voice_channel.is_connected():
+        await ctx.reply(
+            "I'm already connected to a voice channel. Either wait for me to do my thing, "
+            "or forcefully disconnect me if you think there has been a problem."
+        )
+        return
+
+    for channel_id in channels:
+        channel = bot.get_channel(channel_id)
+        if not isinstance(channel, discord.VoiceChannel):
+            await ctx.reply(f"{channel_id} is not a valid voice channel id. I'm going to skip it.")
+            continue
+
+        voice_channel: discord.VoiceClient = await channel.connect()
+        voice = discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(sound), volume=volume)
+        voice_channel.play(voice)
+        while voice_channel.is_playing():
+            await asyncio.sleep(.1)
+
+        await voice_channel.voice_disconnect()
+        await voice_channel.disconnect()
+
+    await ctx.reply("Finished")
+
+
 @bot.hybrid_command(name="sync", description="Synchronize all the bot's commands")
-@commands.is_owner()
+@commands.has_permissions(kick_members=True)
+@discord.app_commands.guild_only()
 async def sync(ctx: Context):
     await bot.tree.sync()
     await ctx.reply("Finished sync")
